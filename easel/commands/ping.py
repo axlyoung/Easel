@@ -10,7 +10,7 @@ import urllib.request
 
 from easel.gateway_endpoint import healthz_url, port_source, resolve_gateway_port
 from easel.openclaw_cmd import openclaw_base_cmd
-from easel.direct_api import DirectAPIError, read_settings, stream_chat
+from easel.direct_api import DirectAPIError, PROJECT_ROOT, read_settings, stream_chat
 
 GREEN = "\033[0;32m"
 RED = "\033[0;31m"
@@ -19,11 +19,11 @@ NC = "\033[0m"
 
 def _proxy_env() -> dict[str, str]:
     """返回带外网代理的环境变量（保护内网直连）。"""
-    env = os.environ.copy()
-    env.setdefault("http_proxy", os.environ.get("EASEL_PROXY", ""))
-    env.setdefault("https_proxy", os.environ.get("EASEL_PROXY", ""))
-    env.setdefault("no_proxy", "localhost,127.0.0.1,*.xiaohongshu.com,*.devops.xiaohongshu.com,10.*")
-    return env
+    from easel.runtime_env import proxy_environment
+
+    return proxy_environment(dict(os.environ),
+                             "localhost,127.0.0.1,*.xiaohongshu.com,*.devops.xiaohongshu.com,10.*",
+                             env_file=PROJECT_ROOT / ".env")
 
 
 def _step(label: str, cmd: list[str], timeout: int = 30,
@@ -85,7 +85,10 @@ def cmd_ping(_args) -> int:
     # Step 1: Gateway healthz（端口不写死：非默认 profile 走哈希，easel → 37289）
     gateway_step = f"Step 1: Gateway healthz (localhost:{resolve_gateway_port()})"
     try:
-        with urllib.request.urlopen(healthz_url(), timeout=10) as response:
+        # 回环探针不走继承的 http_proxy（doctor 同款）：否则代理环境下健康的
+        # 网关会被误报 FAIL，诱导用户去重启一个其实活着的 gateway。
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(healthz_url(), timeout=10) as response:
             gateway_ok = response.status == 200
     except (OSError, urllib.error.URLError):
         gateway_ok = False

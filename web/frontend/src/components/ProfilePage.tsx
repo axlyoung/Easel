@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { fetchPersonaFiles, savePersonaFile, deletePersona, fetchAccountAnalytics } from '../lib/api';
-import type { PersonaFile, AccountAnalytics } from '../lib/api';
+import { useState, useEffect, useCallback } from 'react';
+import { ApiError, fetchPersonaFiles, savePersonaFile, deletePersona, fetchAccountAnalytics } from '../lib/api';
+import type { PersonaItem, PersonaFile, AccountAnalytics } from '../lib/api';
 import { renderMarkdown } from '../lib/sanitize';
+import { IconProfile, IconPlus } from './icons';
 
 // 粉丝量级：把粉丝数映射成人话档位（画像里“粉丝量级”一栏要的是量级而非精确值）
 function fanTier(n: number): string {
@@ -51,8 +52,10 @@ function mergeWechatBlock(existing: string, block: string): string {
 
 interface ProfilePageProps {
   persona: string;
+  onUsePersona: (name: string) => void;
   onNewProfile: () => void;
   onDeleted: (name: string) => void;
+  loadPersonas: () => Promise<PersonaItem[] | null>;
 }
 
 const DIM_META: Record<string, { label: string; icon: string }> = {
@@ -64,7 +67,97 @@ const DIM_META: Record<string, { label: string; icon: string }> = {
   'memory.md': { label: '经验沉淀', icon: '🧠' },
 };
 
-export default function ProfilePage({ persona, onNewProfile, onDeleted }: ProfilePageProps) {
+export default function ProfilePage(props: ProfilePageProps) {
+  const [viewedPersona, setViewedPersona] = useState(props.persona);
+  const [personas, setPersonas] = useState<PersonaItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [notice, setNotice] = useState('');
+  const { onDeleted, loadPersonas } = props;
+  const handleDeleted = useCallback((name: string, alreadyMissing = false) => {
+    setPersonas((list) => list.filter((p) => p.name !== name));
+    setViewedPersona((current) => current === name ? '' : current);
+    setNotice(alreadyMissing ? `画像「${name}」已不存在，已更新列表。` : `已删除画像「${name}」`);
+    setRevision((n) => n + 1);
+    onDeleted(name);
+  }, [onDeleted]);
+
+  useEffect(() => { setViewedPersona(props.persona); }, [props.persona]);
+  useEffect(() => {
+    let ignore = false;
+    setLoading(true);
+    setError('');
+    loadPersonas().then((list) => {
+      if (!ignore) {
+        if (list === null) {
+          setError('画像列表已更新，请重新加载。');
+          return;
+        }
+        setPersonas(list);
+        setViewedPersona((name) => list.some((p) => p.name === name) ? name : '');
+      }
+    }).catch(() => {
+      if (!ignore) setError('加载画像列表失败，请重试。');
+    }).finally(() => { if (!ignore) setLoading(false); });
+    return () => { ignore = true; };
+  }, [revision, loadPersonas, props.persona]);
+
+  if (!loading && !error && viewedPersona && personas.some((p) => p.name === viewedPersona)) {
+    return <ProfileDetail key={viewedPersona} {...props} persona={viewedPersona}
+      inUse={viewedPersona === props.persona}
+      onBack={() => { setViewedPersona(''); setRevision((n) => n + 1); }}
+      onDeleted={handleDeleted} />;
+  }
+
+  return (
+    <div className="profile-page">
+      <div className="profile-head">
+        <div>
+          <h1 className="page-title">用户画像</h1>
+          <p className="page-subtitle">管理你的定位、风格与受众，为每一种创作找到合适的身份。</p>
+        </div>
+        <button className="btn btn-primary" onClick={props.onNewProfile}><IconPlus size={15} /> 新建画像</button>
+      </div>
+      <div className="profile-mode-note">
+        <IconProfile size={18} />
+        <span>{props.persona ? `当前对话使用「${props.persona}」` : '当前对话为通用模式'}<small>查看和编辑画像不会切换对话身份。</small></span>
+        {props.persona && <button className="btn btn-sm" onClick={() => props.onUsePersona('')}>使用通用模式</button>}
+      </div>
+      {notice && <p role="status">{notice}</p>}
+      {loading ? <div className="loading"><div className="spinner" />加载画像…</div>
+        : error ? <div className="empty-state"><p role="alert">{error}</p><button className="btn" onClick={() => setRevision((n) => n + 1)}>重新加载</button></div>
+        : personas.length === 0 ? <div className="empty-state profile-empty">
+          <div className="profile-avatar"><IconProfile size={28} /></div>
+          <h3>创建你的第一个画像</h3>
+          <p>记录账号定位、内容风格和偏好，让每次创作都更贴合你。</p>
+          <button className="btn btn-primary" onClick={props.onNewProfile}><IconPlus size={15} /> 新建画像</button>
+        </div> : <>
+          <div className="section-title">我的画像 · {personas.length}</div>
+          <div className="profile-grid">
+            {personas.map((p) => <article className="card profile-summary" key={p.name}>
+              <div className="profile-summary-head">
+                <div className="profile-avatar"><IconProfile size={22} /></div>
+                {p.name === props.persona && <span className="badge badge-accent">当前使用</span>}
+              </div>
+              <h2>{p.name}</h2>
+              <p className="profile-summary-description">{p.description || '还没有定位简介，打开画像完善你的创作方向。'}</p>
+              <div className="profile-summary-actions">
+                <button className="btn" onClick={() => setViewedPersona(p.name)}>查看 / 编辑</button>
+                <button className="btn btn-primary" onClick={() => props.onUsePersona(p.name)}>切换画像</button>
+              </div>
+            </article>)}
+          </div>
+        </>}
+    </div>
+  );
+}
+
+function ProfileDetail({ persona, onDeleted, onBack, onUsePersona, inUse }: Omit<ProfilePageProps, 'onDeleted'> & {
+  onDeleted: (name: string, alreadyMissing?: boolean) => void;
+  onBack: () => void;
+  inUse: boolean;
+}) {
   const [files, setFiles] = useState<PersonaFile[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState(false);
@@ -72,7 +165,7 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
   const [error, setError] = useState('');
   const [savingFile, setSavingFile] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const [toast, setToast] = useState('');
+  const [toast, setToast] = useState<{ message: string; kind: 'ok' | 'error' } | null>(null);
   const [fetchingWx, setFetchingWx] = useState(false);
 
   useEffect(() => {
@@ -87,12 +180,19 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
         setFiles(d.files);
         setDrafts(Object.fromEntries(d.files.map((f) => [f.filename, f.content])));
       })
-      .catch(() => { if (!ignore) setError('加载画像失败'); })
+      .catch((e: unknown) => {
+        if (ignore) return;
+        if (e instanceof ApiError && e.status === 404) onDeleted(persona, true);
+        else setError(e instanceof Error ? `加载画像失败：${e.message}` : '加载画像失败，请返回列表后重试。');
+      })
       .finally(() => { if (!ignore) setLoading(false); });
     return () => { ignore = true; };
-  }, [persona]);
+  }, [persona, onDeleted]);
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+  const showToast = (message: string, kind: 'ok' | 'error' = 'ok') => {
+    setToast({ message, kind });
+    setTimeout(() => setToast(null), 2500);
+  };
 
   const handleSave = async (filename: string) => {
     setSavingFile(filename);
@@ -101,7 +201,7 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
       setFiles((prev) => prev.map((f) => f.filename === filename ? { ...f, content: drafts[filename] ?? '' } : f));
       showToast(`已保存 ${DIM_META[filename]?.label || filename} ✓`);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '保存失败');
+      showToast(e instanceof Error ? e.message : '保存失败', 'error');
     } finally {
       setSavingFile('');
     }
@@ -114,7 +214,7 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
     try {
       const a = await fetchAccountAnalytics('wechat-oa');
       if (!a.loggedIn) {
-        showToast('公众号后台未登录：请先到「账号」页扫码登录后再抓取');
+        showToast('公众号后台未登录：请先到「账号」页扫码登录后再抓取', 'error');
         return;
       }
       const base = files.find((f) => f.filename === filename)?.content ?? '';
@@ -125,7 +225,7 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
       setDrafts((p) => ({ ...p, [filename]: merged }));
       showToast(`已抓取并更新画像（粉丝 ${a.followers ?? 0}，已发表 ${a.posts ?? 0} 篇）✓`);
     } catch (e) {
-      showToast(e instanceof Error ? `抓取失败：${e.message}` : '抓取失败（可能未登录或平台改版）');
+      showToast(e instanceof Error ? `抓取失败：${e.message}` : '抓取失败（可能未登录或平台改版）', 'error');
     } finally {
       setFetchingWx(false);
     }
@@ -137,30 +237,26 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
     try {
       await deletePersona(persona);
       onDeleted(persona);
-      showToast(`已删除画像「${persona}」`);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '删除失败');
+      if (e instanceof ApiError && e.status === 404) onDeleted(persona, true);
+      else showToast(e instanceof Error ? `删除失败：${e.message}` : '删除失败', 'error');
     } finally {
       setDeleting(false);
     }
   };
 
-  if (!persona) {
-    return (
-      <div className="profile-page">
-        <h1 className="page-title">用户画像 Profile</h1>
-        <div className="empty-state" style={{ height: '70%' }}>
-          <div className="empty-icon">👤</div>
-          <h3>还没有选择画像</h3>
-          <p>画像沉淀你的定位、风格、受众与红线，生成内容会更贴合你的人设。</p>
-          <button className="btn btn-primary" onClick={onNewProfile}>+ 新建画像</button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="profile-page">
+      <div className="profile-detail-nav">
+        <button className="btn btn-sm" disabled={!!savingFile || fetchingWx || deleting} onClick={() => {
+          if (files.some((f) => (drafts[f.filename] ?? '') !== f.content)
+              && !window.confirm('还有未保存的修改，确定返回画像列表吗？')) return;
+          onBack();
+        }}>← 全部画像</button>
+        {inUse ? <span className="badge badge-accent">当前对话使用中</span>
+          : <button className="btn btn-sm" onClick={() => onUsePersona(persona)}>切换画像</button>}
+      </div>
       <div className="profile-head">
         <div>
           <h1 className="page-title">{persona}</h1>
@@ -223,7 +319,9 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
         })
       )}
 
-      {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
+      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>
+        <span className="toast-icon" aria-hidden="true">{toast.kind === 'ok' ? '✓' : '!'}</span>{toast.message}
+      </div>}
     </div>
   );
 }

@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <strong>简体中文</strong> · <a href="README_EN.md">English</a>
+  <strong>简体中文</strong> · <a href="README_EN.md">English</a> · <a href="README_JA.md">日本語</a>
 </p>
 
 <p align="center">
@@ -65,7 +65,7 @@ Easel 围绕五个连续工作流展开：**发现**适合账号的热点与机�
 - **技能是真执行，不是功能清单**：图片、卡片、配音、字幕、剪辑、短剧和发布技能都配有可运行脚本，成品写入 `outputs/`。
 - **一份素材，多种平台形态**：同一主题可以改写成小红书卡片、短视频、知乎长文或短帖，并遵循不同平台的格式和字数要求。
 - **项目化保存产物**：内容、素材、中间文件和元数据按项目归档，后续修改、重试和发布不会散落在聊天记录里。
-- **真实发布与复盘闭环**：目前支持小红书、抖音、快手、知乎、B 站、微信视频号、微信公众号七个平台的登录、适配和发布，并可回收账号数据。
+- **真实发布与复盘闭环**：目前支持小红书、抖音、快手、知乎、B 站、微信视频号、微信公众号、推特 X、掘金、今日头条十个平台的登录、适配和发布，并可回收账号数据。
 
 ## 🧭 五层内容工作流
 
@@ -83,7 +83,7 @@ Easel 围绕五个连续工作流展开：**发现**适合账号的热点与机�
 | **策划** | 账号定位分析、受众画像、人设与声音构建、账号诊断、选题矩阵、选题评分、热点结合、系列内容规划、标题与 Hook、文章大纲、分镜脚本、内容日历、跨平台复用、直播策划、营销活动与商单方案 |
 | **文字与视觉** | 社媒文案、短视频与中长视频脚本、小红书笔记、长文、小说、去 AI 感改写、风格迁移、论文解读、金句卡、小红书知识卡、海报、信息图、数据图表、思维导图、对比图、电商详情图、Meme、AI 生图、图片增强、去背景与批处理 |
 | **音频与视频** | 文字转语音、多角色配音、声音克隆、AI 音乐、降噪、混音、语音转文字、音频可视化、AI 视频、AI 短剧、字幕与翻译、视频剪辑、长视频切片、直播高光、横竖版转换、片头片尾、相册视频、音乐卡点、绿幕换背景、视频转图文与章节目录 |
-| **发布与归因** | 发布质量门禁、敏感与版权风险检查、平台搜索优化、发布 Checklist、多平台格式适配；小红书、抖音、快手、知乎、B 站、微信视频号、微信公众号登录与发布；内容日历回写、账号数据、评论洞察、内容复盘、ROI 与画像记忆 |
+| **发布与归因** | 发布质量门禁、敏感与版权风险检查、平台搜索优化、发布 Checklist、多平台格式适配；小红书、抖音、快手、知乎、B 站、微信视频号、微信公众号、推特 X、掘金、今日头条登录与发布；内容日历回写、账号数据、评论洞察（掘金走公开 JSON 接口、X 走网页 DOM 采集）、内容复盘、ROI 与画像记忆 |
 
 ## 🖥️ 工作台功能示例
 
@@ -99,7 +99,7 @@ Easel 围绕五个连续工作流展开：**发现**适合账号的热点与机�
     </td>
     <td width="50%" valign="top">
       <strong>🔥 热点雷达</strong><br>
-      <sub>聚合微博、抖音、知乎、B 站、百度和头条等平台热榜，帮助 Agent 从实时趋势中筛选适合当前账号的选题。</sub><br><br>
+      <sub>聚合现有平台热榜，并通过标准协议接入你自己的 Python 采集脚本、HTTP 服务或 RSS/Atom 订阅，从更多来源寻找适合账号的选题。</sub><br><br>
       <img src="assets/readme/features/discover.png" width="100%" alt="Easel 多平台热点雷达">
     </td>
   </tr>
@@ -201,7 +201,7 @@ README 的品牌图、海报、案例图片和视频统一保存在 `assets/read
 
 ## 🚀 快速开始
 
-环境要求：Linux、macOS 或 Windows 10/11、Python 3.10 及以上、Python `venv` 模块和 `git`。安装向导会检查 Node.js 24.16+（24.x）、26.1+（26.x）或 27+（25.x 与 26.0 不兼容）、FFmpeg、Playwright/Chromium；缺少 Node.js 时会按系统给出安装引导。
+环境要求：Linux、macOS 或 Windows 10/11、Python 3.10 及以上、Python `venv` 模块和 `git`。安装向导会检查 Node.js 24.22.1+（24.x）、26.12.1+（26.x）或 27+（25.x 不兼容）、FFmpeg、Playwright/Chromium；缺少 Node.js 时会按系统给出安装引导。
 
 ```bash
 git clone https://github.com/ZJU-REAL/Easel.git
@@ -218,7 +218,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 ```
 
-Windows 安装器会优先通过 `winget` 自动安装缺失的 Python 3.10+、Node.js 24.16+（24.x）、26.1+（26.x）或 27+、Git 和 FFmpeg；25.x 与 26.0 不兼容。如果系统没有 `winget`，再使用官方安装器安装并加入 PATH。随后安装器会创建项目内 `.venv`，安装 Python/Node 依赖、前端生产包和 Playwright Chromium，并使用独立的 `easel` OpenClaw profile。安装完成后可运行 `.venv\Scripts\easel.exe doctor` 检查环境。
+Windows 安装器会优先通过 `winget` 自动安装缺失的 Python 3.10+、Node.js 24.22.1+（24.x）、26.12.1+（26.x）或 27+、Git 和 FFmpeg；25.x 不兼容。如果系统没有 `winget`，再使用官方安装器安装并加入 PATH。随后安装器会创建项目内 `.venv`，安装 Python/Node 依赖、前端生产包和 Playwright Chromium，并使用独立的 `easel` OpenClaw profile。安装完成后可运行 `.venv\Scripts\easel.exe doctor` 检查环境。
 
 安装器支持 Windows 自带的 PowerShell 5.1，安装后可直接运行 `.venv\Scripts\easel.exe web` 启动工作台。原生安装与 Web/CLI 入口已经提供；各技能及浏览器发布的 Windows 全链路兼容仍在持续完善。
 
@@ -331,6 +331,8 @@ API 直连模式不提供此 OpenClaw 专用开关。
 
 ## 🧩 使用 Easel
 
+发布中心提供“自动发布 / 人工审核发布”两条可选路径，默认保留原有自动发布流程。人工路径采用“AI 排版 → 人工审核 → 复制/导出 → 官方发布页亲自提交”，修改稿件或素材后需重新审核，导出和排期不等于已发布；公众号支持富文本复制和 HTML 预览。页面切换不更改全局发布权限；如需在 Web 后端禁用自动提交，可配置 `EASEL_PUBLISH_MODE=manual`。配置边界、登录状态和导出说明见[人工发布工作流](docs/manual-publishing.md)。
+
 常用入口：
 
 | 命令 | 作用 |
@@ -379,11 +381,16 @@ Easel/
 
 Easel 使用独立的 `easel` OpenClaw profile，不会覆盖你本机已有的 OpenClaw 配置。Web 默认运行在 `7860`；gateway 端口由 OpenClaw 决定（非默认 profile 会分配哈希端口，如 `easel` → `37289`，不是 `18789`），Easel 会自动解析，无需手配。
 
+也可在「设置 → Agent 底座」选择 Hermes Agent。手动安装 Hermes 并启用 ACP：`hermes pm install --extra acp`；先用 `hermes profile list` 检查 `easel` profile，若不存在再运行 `hermes profile create easel --no-skills`，随后用 `hermes --profile easel setup` 配置。已有同名 profile 时先确认用途和状态，不要覆盖或删除。Easel 通过 Hermes CLI 选择该 profile，模型凭证仍由 Hermes 管理，不会复制默认 profile 或 Easel `.env` 中的模型凭证。profile 隔离 Hermes 自身配置和会话，不是操作系统沙箱；工具仍以运行 Easel 的账户权限访问文件。运行 `python -m easel.commands.hermes_skills` 可将缺失的内置技能目录复制到该 profile；脚本会通过 Hermes CLI 解析准确路径，且已有同名技能会原样保留。详见[Agent 底座配置](docs/agent-harnesses.md)。
+
 ## 📑 文档
 
+- [热点数据源接入：Python 脚本 / HTTP 服务 / RSS 订阅](docs/trend-collectors.md)
+- [渠道平台接入指南](docs/channel-platforms.md)
 - [能力地图](docs/skill-function-mapping.md)
 - [SKILL 接口规范](docs/SKILL-SPEC.md)
 - [提示词与架构分层](docs/prompt-stack.md)
+- [上下文预算诊断](docs/context-budget-diagnostics.md)
 - [已知问题](docs/known-issues.md)
 - [完整致谢](docs/ACKNOWLEDGMENTS.md)
 
@@ -394,7 +401,7 @@ Easel 使用独立的 `easel` OpenClaw profile，不会覆盖你本机已有的 
 - [ ] **1. 适配 Windows 系统** —— 完善原生 Windows 下安装、路径与编码、浏览器发布等全链路兼容。
 - [ ] **2. 安装简易化** —— 降低上手门槛，减少手动步骤，提供更顺滑的一键安装体验。
 - [ ] **3. 优化页面 Agent 交互** —— 改进 Web 工作台的对话交互、加载逻辑与流式反馈等体验细节。
-- [ ] **4. 适配更多 Agent Harness** —— 支持 OpenClaw 之外的更多 Agent 运行框架，例如 Claude Code、DeepSeek harness、Codex 等。
+- [ ] **4. 适配更多 Agent Harness** —— 完善现有 Codex / OpenCode 接入，并适配 Claude Code、DeepSeek harness 等更多运行框架。已有引擎的切换方式见 [Agent 底座接入](docs/agent-harnesses.md)。
 
 ## 🙏 致谢
 
@@ -416,6 +423,7 @@ Easel 的技能体系和工作流受益于许多优秀的开源项目、工具�
     <td align="center" width="84"><a href="https://github.com/qywMichelle"><img src="https://github.com/qywMichelle.png?size=96" width="72" height="72" alt="qywMichelle"><br><strong>qywMichelle</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/wulinjuan"><img src="https://github.com/wulinjuan.png?size=96" width="72" height="72" alt="wulinjuan"><br><strong>wulinjuan</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/arctanxarc"><img src="https://github.com/arctanxarc.png?size=96" width="72" height="72" alt="arctanxarc"><br><strong>arctanxarc</strong></a></td>
+    <td align="center" width="84"><a href="https://github.com/hongxingli319"><img src="https://github.com/hongxingli319.png?size=96" width="72" height="72" alt="hongxingli319"><br><strong>hongxingli319</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/mengyuyuan"><img src="https://github.com/mengyuyuan.png?size=96" width="72" height="72" alt="mengyuyuan"><br><strong>mengyuyuan</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/Dear47"><img src="https://github.com/Dear47.png?size=96" width="72" height="72" alt="Dear47"><br><strong>Dear47</strong></a></td>
   </tr>

@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import EnvBoard from './EnvBoard';
 import HarnessSettings from './HarnessSettings';
-import { OptionsDropdown } from './SettingsSelect';
+import SettingsSelect, { OptionsDropdown } from './SettingsSelect';
 import type { JobView } from './EnvBoard';
 import {
   fetchEnvTools, startEnvInstall, fetchEnvJob,
   fetchModelChannels, runChannelSelftest, saveModelConfig,
   fetchLocalAgents, enableLocalAgent, fetchAvailableModels,
+  fetchProxySettings, saveProxySettings,
 } from '../lib/api';
-import type { EnvTool, ModelRow, SelftestResult, LocalAgentInfo } from '../lib/api';
+import type { EnvTool, ModelRow, SelftestResult, LocalAgentInfo, ProxySettings } from '../lib/api';
 import { IconSlidersHorizontal, IconPackage, IconEllipsis } from './settingsIcons';
 
 interface Props {
@@ -64,6 +65,9 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
   const [chan, setChan] = useState<Chan>('chat');
   const [harness, setHarness] = useState('');
   const [selectedHarness, setSelectedHarness] = useState('');
+  const [harnessPreview, setHarnessPreview] = useState<{ runtime: string }>();
+  const harnessSection = useRef<HTMLDivElement>(null);
+  const clearHarnessPreview = useCallback(() => setHarnessPreview(undefined), []);
 
   // ── 环境安装（引擎真实数据） ──────────────────────────────
   const [tools, setTools] = useState<EnvTool[]>([]);
@@ -90,6 +94,37 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
   useEffect(() => {
     if (sec === 'env') void refreshEnv();
   }, [sec, refreshEnv]);
+
+  // ── 更多设置：网络代理（EASEL_PROXY，落 .env，保存即生效） ──────────────
+  const [proxyCfg, setProxyCfg] = useState<ProxySettings | null>(null);
+  const [proxyInput, setProxyInput] = useState('');
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxyMsg, setProxyMsg] = useState('');
+  const [proxyErr, setProxyErr] = useState('');
+
+  useEffect(() => {
+    if (sec !== 'more') return;
+    fetchProxySettings()
+      .then((d) => { setProxyCfg(d); setProxyInput(d.proxy); setProxyErr(''); setProxyMsg(''); })
+      .catch(() => setProxyErr('读取代理配置失败'));
+  }, [sec]);
+
+  const saveProxy = useCallback(async (value?: string) => {
+    const proxy = (value ?? proxyInput).trim();
+    setProxyBusy(true); setProxyErr(''); setProxyMsg('');
+    try {
+      const r = await saveProxySettings(proxy);
+      setProxyCfg({ proxy: r.proxy, source: (r.source as ProxySettings['source']) || 'none' });
+      setProxyInput(r.proxy);
+      setProxyMsg(r.proxy ? `已保存：${r.proxy} —— 立即生效，无需重启` : '已清除代理配置');
+    } catch (e) {
+      setProxyErr(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setProxyBusy(false);
+    }
+  }, [proxyInput]);
+
+  const clearProxy = useCallback(() => { setProxyInput(''); void saveProxy(''); }, [saveProxy]);
 
   const batchMode = useRef(false);
 
@@ -170,9 +205,11 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
   const [laModels, setLaModels] = useState<Record<string, string>>({});
   const [localAgentNote, setLocalAgentNote] = useState('');
 
-  // 拉取模型列表：{ 行号 → { loading, models, err } }。结果按 baseUrl 落 localStorage（7 天过期），
+  // 拉取模型列表：{ 通道#行号 → { loading, models, err } }。结果按 baseUrl 落 localStorage（7 天过期），
   // 刷新页面/重开设置不用重新拉。
-  const [modelLists, setModelLists] = useState<Record<number, { loading: boolean; models: string[]; err: string; fetchedAt?: number }>>({});
+  // 键必须带通道前缀：六个通道共用 renderBoard，裸行号会让「对话」通道拉到的
+  // 模型列表串到「生图」同名行上（下拉可选到另一个 provider 的模型）。
+  const [modelLists, setModelLists] = useState<Record<string, { loading: boolean; models: string[]; err: string; fetchedAt?: number }>>({});
   // localStorage 里按 baseUrl 存的拉取结果（7 天过期），初始化时一次性读入。
   const [modelCache, setModelCache] = useState<Record<string, { models: string[]; fetchedAt: number }>>(() => {
     try {
@@ -180,11 +217,11 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
       return raw ? JSON.parse(raw) : {};
     } catch { return {}; }
   });
-  // 自定义下拉面板的展开状态与收起检测
-  const [openDd, setOpenDd] = useState<Record<number, boolean>>({});
-  const [protoDd, setProtoDd] = useState<Record<number, boolean>>({});
-  const protoRefs = useRef<Record<number, HTMLSpanElement | null>>({});
-  const modelCellRefs = useRef<Record<number, HTMLSpanElement | null>>({});
+  // 自定义下拉面板的展开状态与收起检测（键同样带通道前缀，见 modelLists）
+  const [openDd, setOpenDd] = useState<Record<string, boolean>>({});
+  const [protoDd, setProtoDd] = useState<Record<string, boolean>>({});
+  const protoRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  const modelCellRefs = useRef<Record<string, HTMLSpanElement | null>>({});
 
   useEffect(() => {
     if (harness !== 'openclaw') return;
@@ -209,13 +246,13 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
     }
   }, []);
 
-  const pullModels = useCallback(async (i: number, r: ModelRow) => {
-    setModelLists((m) => ({ ...m, [i]: { loading: true, models: m[i]?.models || [], err: '' } }));
+  const pullModels = useCallback(async (key: string, r: ModelRow) => {
+    setModelLists((m) => ({ ...m, [key]: { loading: true, models: m[key]?.models || [], err: '' } }));
     try {
       const proto = r.slot === 'custom' ? (r.protocol || 'openai') : (r.type === 'anthropic' ? 'anthropic' : 'openai');
       const d = await fetchAvailableModels(r.baseUrl || '', r.keyNew || '', proto, r.slot || '', r.name || '');
       const fetchedAt = Date.now();
-      setModelLists((m) => ({ ...m, [i]: { loading: false, models: d.models, err: d.models.length ? '' : '该端点没有返回模型', fetchedAt } }));
+      setModelLists((m) => ({ ...m, [key]: { loading: false, models: d.models, err: d.models.length ? '' : '该端点没有返回模型', fetchedAt } }));
       if (d.models.length) {
         setModelCache((c) => {
           const next = { ...c, [cacheKeyFor(r)]: { models: d.models, fetchedAt } };
@@ -224,7 +261,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
         });
       }
     } catch (e) {
-      setModelLists((m) => ({ ...m, [i]: { loading: false, models: m[i]?.models || [], err: e instanceof Error ? e.message : '拉取失败' } }));
+      setModelLists((m) => ({ ...m, [key]: { loading: false, models: m[key]?.models || [], err: e instanceof Error ? e.message : '拉取失败' } }));
     }
   }, []);
 
@@ -367,7 +404,27 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
   const setPrimaryRow = (i: number) =>
     setChatRows((rs) => rs.map((r, j) => (r.slot ? { ...r, role: j === i ? '主' : '备' } : r)));
 
-  const removeRow = (i: number) =>
+  const removeRow = (i: number) => {
+    // 删行后整体索引前移一位：把该通道的会话态键同步平移，
+    // 否则「已拉取/错误」标记会错挂到别行上。localStorage 缓存按 baseUrl，不受影响。
+    const shiftBoardKeys = (board: string) => {
+      const prefix = `${board}#`;
+      const shift = <T,>(rec: Record<string, T>): Record<string, T> => {
+        const next: Record<string, T> = {};
+        for (const [key, val] of Object.entries(rec)) {
+          if (!key.startsWith(prefix)) { next[key] = val; continue; }
+          const idx = Number(key.slice(prefix.length));
+          if (Number.isNaN(idx)) { next[key] = val; continue; }
+          if (idx === i) continue;                 // 被删行的状态随之丢弃
+          next[prefix + (idx > i ? idx - 1 : idx)] = val;
+        }
+        return next;
+      };
+      setModelLists(shift);
+      setOpenDd(shift);
+      setProtoDd(shift);
+    };
+    shiftBoardKeys('chat');
     setChatRows((rs) => {
       const gone = rs[i];
       const left = rs.filter((_, j) => j !== i);
@@ -377,6 +434,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
       }
       return left;
     });
+  };
 
   const updateRow = (
     setRows: Dispatch<SetStateAction<ModelRow[]>>,
@@ -409,7 +467,11 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
   const renderBoard = (
     rows: ModelRow[],
     ops?: { onRow?: (i: number, patch: Partial<ModelRow>) => void; onPrimary?: (i: number) => void; onRemove?: (i: number) => void; media?: boolean },
-  ) => (
+    board = 'chat',
+  ) => {
+    // 每行的会话态键：通道#行号 —— 不同通道/删除行后错位不再互相污染（见 modelLists 注释）
+    const k = (i: number) => `${board}#${i}`;
+    return (
     modelLoading && rows.length === 0 ? (
       <div className="board"><div className="empty"><span className="spin" /> 正在读取配置…<span className="hint">（后台繁忙时可能稍慢，会自动重试）</span></div></div>
     ) : rows.length === 0 ? (
@@ -449,21 +511,21 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                   role="button"
                   tabIndex={0}
                   aria-haspopup="listbox"
-                  aria-expanded={!!protoDd[i]}
-                  ref={(el) => { protoRefs.current[i] = el; }}
+                  aria-expanded={!!protoDd[k(i)]}
+                  ref={(el) => { protoRefs.current[k(i)] = el; }}
                   title="上游协议：中转站是 OpenAI 兼容格式选 openai；原生 Anthropic 格式（/v1/messages）选 anthropic"
-                  onClick={() => setProtoDd((s) => ({ ...s, [i]: !s[i] }))}
+                  onClick={() => setProtoDd((s) => ({ ...s, [k(i)]: !s[k(i)] }))}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      setProtoDd((state) => ({ ...state, [i]: !state[i] }));
+                      setProtoDd((state) => ({ ...state, [k(i)]: !state[k(i)] }));
                     }
                   }}
                 >
                   <span className="proto-label">{r.protocol === 'anthropic' ? 'anthropic' : 'openai'}</span>
-                  {protoDd[i] && (
+                  {protoDd[k(i)] && (
                     <OptionsDropdown
-                      anchor={protoRefs.current[i]}
+                      anchor={protoRefs.current[k(i)]}
                       items={[{ value: 'openai', label: 'openai（OpenAI 兼容）' }, { value: 'anthropic', label: 'anthropic（原生 /v1/messages）' }]}
                       current={r.protocol || 'openai'}
                       onPick={(v) => {
@@ -471,13 +533,13 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                         // 协议变了，旧协议拉来的模型列表不再适用：清内存列表 + 收起
                         setModelLists((m) => {
                           const next = { ...m };
-                          delete next[i];
+                          delete next[k(i)];
                           return next;
                         });
-                        setProtoDd((s) => ({ ...s, [i]: false }));
-                        setOpenDd((state) => ({ ...state, [i]: false }));
+                        setProtoDd((s) => ({ ...s, [k(i)]: false }));
+                        setOpenDd((state) => ({ ...state, [k(i)]: false }));
                       }}
-                      onClose={() => setProtoDd((s) => ({ ...s, [i]: false }))}
+                      onClose={() => setProtoDd((s) => ({ ...s, [k(i)]: false }))}
                     />
                   )}
                 </span>
@@ -487,28 +549,28 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                 <span>{r.type}</span>
               )}
               {ed && ed.model && (!ops?.media || r.adv) ? (
-                <span className={`model-cell${isCustom ? ' custom-model-cell' : ''}`} ref={(el) => { modelCellRefs.current[i] = el; }}>
+                <span className={`model-cell${isCustom ? ' custom-model-cell' : ''}`} ref={(el) => { modelCellRefs.current[k(i)] = el; }}>
                   <input
                     className="mock"
                     value={r.model}
                     placeholder={isCustom ? '模型名' : ''}
                     onChange={(e) => ops?.onRow?.(i, { model: e.target.value })}
-                    onFocus={() => setOpenDd((s) => ({ ...s, [i]: true }))}
+                    onFocus={() => setOpenDd((s) => ({ ...s, [k(i)]: true }))}
                   />
-                  {openDd[i] ? (
+                  {openDd[k(i)] ? (
                     <FixedDropdown
-                      anchor={modelCellRefs.current[i]}
-                      models={modelLists[i]?.models.length ? modelLists[i].models : (cachedListFor(r)?.models || [])}
+                      anchor={modelCellRefs.current[k(i)]}
+                      models={modelLists[k(i)]?.models.length ? modelLists[k(i)].models : (cachedListFor(r)?.models || [])}
                       current={r.model}
-                      emptyHint={modelLists[i]?.err || undefined}
-                      onPull={() => void pullModels(i, r)}
-                      pulling={modelLists[i]?.loading}
-                      onPick={(mid) => { ops?.onRow?.(i, { model: mid }); setOpenDd((s) => ({ ...s, [i]: false })); }}
-                      onClose={() => setOpenDd((s) => ({ ...s, [i]: false }))}
+                      emptyHint={modelLists[k(i)]?.err || undefined}
+                      onPull={() => void pullModels(k(i), r)}
+                      pulling={modelLists[k(i)]?.loading}
+                      onPick={(mid) => { ops?.onRow?.(i, { model: mid }); setOpenDd((s) => ({ ...s, [k(i)]: false })); }}
+                      onClose={() => setOpenDd((s) => ({ ...s, [k(i)]: false }))}
                     />
                   ) : null}
                   {(() => {
-                    const mem = modelLists[i];
+                    const mem = modelLists[k(i)];
                     const cached = mem?.fetchedAt ? undefined : cachedListFor(r);
                     const has = !!(mem?.fetchedAt || cached);
                     return (
@@ -516,8 +578,8 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                         className={`fetch-btn${has ? ' ok' : ''}`}
                         title={has ? `已拉取 ${(mem?.models.length || cached!.models.length)} 个模型，点击重新拉取` : '从该端点拉取可用模型列表'}
                         onClick={() => {
-                          setOpenDd((s) => ({ ...s, [i]: true }));
-                          void pullModels(i, r);
+                          setOpenDd((s) => ({ ...s, [k(i)]: true }));
+                          void pullModels(k(i), r);
                         }}
                         disabled={mem?.loading}
                       >
@@ -529,8 +591,8 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       </button>
                     );
                   })()}
-                  {modelLists[i]?.err && (
-                    <span className="fetch-err" title={modelLists[i].err}>⚠</span>
+                  {modelLists[k(i)]?.err && (
+                    <span className="fetch-err" title={modelLists[k(i)].err}>⚠</span>
                   )}
                   {isCustom ? (
                     <span className="thinking-controls">
@@ -543,20 +605,13 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                         该模型会思考
                       </label>
                       {r.thinking && r.protocol !== 'anthropic' ? (
-                        <select
-                          aria-label={`${r.name || '自定义供应商'}思考格式`}
+                        <SettingsSelect label={`${r.name || '自定义供应商'}思考格式`}
                           value={r.thinkingFormat || ''}
-                          onChange={(e) => ops?.onRow?.(i, { thinkingFormat: e.target.value })}
-                        >
-                          <option value="">保留现有 / 自动</option>
-                          <option value="openai">OpenAI</option>
-                          <option value="deepseek">DeepSeek</option>
-                          <option value="openrouter">OpenRouter</option>
-                          <option value="together">Together</option>
-                          <option value="qwen">Qwen</option>
-                          <option value="qwen-chat-template">Qwen chat template</option>
-                          <option value="zai">ZAI</option>
-                        </select>
+                          options={[{ value: '', label: '保留现有 / 自动' },
+                            ...['OpenAI', 'DeepSeek', 'OpenRouter', 'Together', 'Qwen', 'Qwen chat template', 'ZAI'].map((label, i) => ({
+                              label, value: ['openai', 'deepseek', 'openrouter', 'together', 'qwen', 'qwen-chat-template', 'zai'][i],
+                            }))]}
+                          onChange={(value) => ops?.onRow?.(i, { thinkingFormat: value })} />
                       ) : null}
                     </span>
                   ) : null}
@@ -634,7 +689,8 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
         })}
       </div>
     )
-  );
+    );
+  };
 
   const chatOk = chatRows.length > 0 && !chatRows[0].result.includes('缺');
   const transOk = transRows.length > 1 && transRows[1].result.includes('已配置');
@@ -709,7 +765,10 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                 </div>
                 {savedNote ? <div className={`save-note${savedNote.startsWith('保存失败') || savedNote.startsWith('没有') ? ' err' : ''}`}>{savedNote}</div> : null}
 
-                {chan === 'chat' && <HarnessSettings onChange={setHarness} onSelect={setSelectedHarness} />}
+                {chan === 'chat' && <div ref={harnessSection} tabIndex={-1}>
+                  <HarnessSettings onChange={setHarness} onSelect={setSelectedHarness}
+                    previewRequest={harnessPreview} onPreviewHandled={clearHarnessPreview} />
+                </div>}
                 {chan === 'chat' && (selectedHarness === 'api' || selectedHarness === 'openclaw') && (
                   <section className="st-panel active">
                     <div className="panel-top">
@@ -719,7 +778,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="spacer" />
                       <button className="btn btn-sm" onClick={() => void doSelftest('chat')} disabled={testing || selectedHarness !== harness}>自测本通道</button>
                     </div>
-                    {renderBoard(chatRows, { onRow: (i, p) => updateRow(setChatRows, i, p), onPrimary: setPrimaryRow, onRemove: removeRow })}
+                    {renderBoard(chatRows, { onRow: (i, p) => updateRow(setChatRows, i, p), onPrimary: setPrimaryRow, onRemove: removeRow }, 'chat')}
                     {selectedHarness === 'api' ? <div className="foot-note">此通道使用独立的 EASEL_DIRECT_API_* 配置，与原有 OpenAI 通道分开保存。支持聊天、画像、文本和图片附件（需模型支持图片）。没有本机文件、浏览器或技能执行工具。</div>
                       : <div className="add-row" onClick={addProvider}>＋ 添加供应商（填名称 / 模型 / Base URL / Key；点「设为主」切换生效通道）</div>}
                     {harness === 'openclaw' && (() => {
@@ -729,35 +788,39 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       if (localAgentsErr) return <div className="foot-note">本机 agent 探测失败：{localAgentsErr}</div>;
                       if (!shown.length) return null;
                       const usable = shown.filter((a) => a.supported);
+                      const native = shown.filter((a) => a.nativeRuntime);
                       return (
                         <div className="local-agents">
                           <div className="la-head">
                             本机 Agent
                             <span className="desc">
-                              {usable.length
-                                ? `检测到可免 API Key 使用：${usable.map((a) => a.label).join('、')}`
-                                : '检测到的 CLI 暂无底座后端，仍需填 API Key'}
+                              {native.length
+                                ? `可配置独立引擎：${native.map((a) => a.label).join('、')}；认证由对应 CLI 管理`
+                                : usable.length
+                                  ? `可通过 OpenClaw 接入：${usable.map((a) => a.label).join('、')}（需先登录）`
+                                  : '检测到本机 CLI，当前入口暂无可用的接入方式'}
                             </span>
                           </div>
                           {shown.map((a) => (
                             <div className="la-row" key={a.id}>
                               <span className="la-name">{a.label}<small>{a.path || a.command}</small></span>
-                              <span className={`la-state ${a.configured ? 'ok' : a.supported ? 'todo' : 'na'}`}>
-                                {a.configured ? '已接入' : a.supported ? '可接入' : '暂不支持'}
+                              <span className={`la-state ${a.configured ? 'ok' : a.supported || a.nativeRuntime ? 'todo' : 'na'}`}>
+                                {a.nativeRuntime ? '支持独立引擎' : a.configured ? '已接入' : a.supported ? '可接入' : '暂不支持'}
                               </span>
                               <span className="la-act">
+                                {a.nativeRuntime && (
+                                  <button className="btn btn-sm" onClick={() => {
+                                    setHarnessPreview({ runtime: a.nativeRuntime! });
+                                    harnessSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    harnessSection.current?.focus({ preventScroll: true });
+                                  }}>配置 {a.label.replace(/ CLI$/, '')}</button>
+                                )}
                                 {a.supported && (a.models?.length ?? 0) > 0 && (
-                                  <select
-                                    className="la-model"
+                                  <SettingsSelect className="la-model" label={`${a.label}模型`}
                                     value={laModels[a.id] ?? ''}
-                                    title="选择该 agent 使用的模型"
-                                    onChange={(e) => setLaModels((m) => ({ ...m, [a.id]: e.target.value }))}
-                                  >
-                                    <option value="">默认模型</option>
-                                    {(a.models ?? []).map((m) => (
-                                      <option key={m.id} value={m.id}>{m.name}</option>
-                                    ))}
-                                  </select>
+                                    options={[{ value: '', label: '默认模型' },
+                                      ...(a.models ?? []).map(m => ({ value: m.id, label: m.name }))]}
+                                    onChange={(value) => setLaModels(m => ({ ...m, [a.id]: value }))} />
                                 )}
                                 {a.supported && (
                                   <button
@@ -787,7 +850,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="spacer" />
                       <button className="btn btn-sm" onClick={() => void doSelftest('transcribe')} disabled={testing}>自测本通道</button>
                     </div>
-                    {renderBoard([...transRows, localRow], { onRow: (i, p) => updateRow(setTransRows, i, p) })}
+                    {renderBoard([...transRows, localRow], { onRow: (i, p) => updateRow(setTransRows, i, p) }, 'transcribe')}
                     <div className="foot-note">有字幕不下模型；API 通道缺 key 自动落到本地 whisper（本地组件在「环境安装」页装）。保存即写入 .env 生效。</div>
                   </section>
                 )}
@@ -799,7 +862,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="desc">只填 Key 即用（地址/模型内建）；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
-                    {renderBoard(mediaRows.speech || [], { onRow: (i, p) => updateMediaRow('speech', i, p), onPrimary: (i) => setMediaPrimary('speech', i), media: true })}
+                    {renderBoard(mediaRows.speech || [], { onRow: (i, p) => updateMediaRow('speech', i, p), onPrimary: (i) => setMediaPrimary('speech', i), media: true }, 'speech')}
                     <div className="foot-note">配音脚本按「主」provider 合成；本地 VoxCPM / edge-tts 在视频产线里可直接替代。</div>
                   </section>
                 )}
@@ -811,7 +874,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="desc">只填 Key 即用（地址/模型内建，点「高级」可覆盖）</span>
                       <span className="spacer" />
                     </div>
-                    {renderBoard(mediaRows.image || [], { onRow: (i, p) => updateMediaRow('image', i, p), media: true })}
+                    {renderBoard(mediaRows.image || [], { onRow: (i, p) => updateMediaRow('image', i, p), media: true }, 'image')}
                     <div className="foot-note">按 Base URL 自动选同步 / 异步（apimart）模式；模型名留空用服务端默认。</div>
                   </section>
                 )}
@@ -823,7 +886,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="desc">只填 Key 即用（地址/模型内建，点「高级」可覆盖）；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
-                    {renderBoard(mediaRows.video || [], { onRow: (i, p) => updateMediaRow('video', i, p), onPrimary: (i) => setMediaPrimary('video', i), media: true })}
+                    {renderBoard(mediaRows.video || [], { onRow: (i, p) => updateMediaRow('video', i, p), onPrimary: (i) => setMediaPrimary('video', i), media: true }, 'video')}
                     <div className="foot-note">脚本按「主」provider 出片；同类多家的自动降级随统一网关接入开放。</div>
                   </section>
                 )}
@@ -835,7 +898,7 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
                       <span className="desc">只填 Key 即用；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
-                    {renderBoard(mediaRows.music || [], { onRow: (i, p) => updateMediaRow('music', i, p), onPrimary: (i) => setMediaPrimary('music', i), media: true })}
+                    {renderBoard(mediaRows.music || [], { onRow: (i, p) => updateMediaRow('music', i, p), onPrimary: (i) => setMediaPrimary('music', i), media: true }, 'music')}
                   </section>
                 )}
 
@@ -863,14 +926,52 @@ export default function SettingsPanel({ onClose, banner = '' }: Props) {
             {sec === 'more' && (
               <section className="st-sec active">
                 <div className="panel-top">
-                  <span className="pill off"><span className="dot" />可扩展位</span>
-                  <span className="desc">同一个面板，以后放更多设置</span>
+                  <span className={`pill ${proxyCfg?.proxy ? 'ok' : 'off'}`}><span className="dot" />
+                    {proxyCfg?.proxy ? '代理已配置' : '代理未配置'}</span>
+                  <span className="desc">用于 X 等外网访问；各入口保留已有代理与直连配置，微信固定出口独立生效</span>
+                  <span className="spacer" />
                 </div>
                 <div className="board">
-                  <div className="stub-row"><span className="tag2">预留</span>网关参数（端口 / 绑定 / 会话）<span className="future">就挂在这页旁边</span></div>
+                  <div style={{ padding: 14 }}>
+                    <label className="field-label" style={{ display: 'block', marginBottom: 6 }}>
+                      网络代理（EASEL_PROXY）
+                    </label>
+                    <input
+                      className="field"
+                      style={{ width: '100%', boxSizing: 'border-box' }}
+                      value={proxyInput}
+                      disabled={proxyCfg?.source === 'env' || proxyBusy}
+                      onChange={(e) => { setProxyInput(e.target.value); setProxyErr(''); setProxyMsg(''); }}
+                      placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                    />
+                    {proxyCfg?.source === 'env' && (
+                      <div className="foot-note" style={{ marginTop: 8 }}>
+                        启动环境已固定 EASEL_PROXY 环境变量，此处只读；要修改请调整启动环境后重启。
+                      </div>
+                    )}
+                    {proxyErr && <div className="env-error" style={{ marginTop: 8 }}>{proxyErr}</div>}
+                    {proxyMsg && <div className="foot-note" style={{ marginTop: 8 }}>{proxyMsg}</div>}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        disabled={proxyBusy || proxyCfg?.source === 'env'}
+                        onClick={() => void saveProxy()}
+                      >
+                        {proxyBusy ? '保存中…' : '保存'}
+                      </button>
+                      {proxyCfg?.proxy && proxyCfg.source === 'envfile' && (
+                        <button className="btn btn-sm btn-ghost" disabled={proxyBusy} onClick={clearProxy}>
+                          清除代理
+                        </button>
+                      )}
+                    </div>
+                    <div className="foot-note" style={{ marginTop: 10 }}>
+                      保存后立即生效（登录/发布等子进程每次启动都重新读取），无需重启服务。
+                      当前生效：{proxyCfg?.proxy || '（未配置，回退系统代理）'}
+                    </div>
+                  </div>
                   <div className="stub-row"><span className="tag2">预留</span>通用设置（语言 / 更新 / 数据目录）<span className="future">按需加</span></div>
                 </div>
-                <div className="foot-note">扩展方式：在这个面板里加标签即可——模型、环境已各就位，其余按需加。</div>
               </section>
             )}
           </div>

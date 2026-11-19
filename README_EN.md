@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <strong>English</strong>
+  <a href="README.md">简体中文</a> · <strong>English</strong> · <a href="README_JA.md">日本語</a>
 </p>
 
 <p align="center">
@@ -83,7 +83,7 @@ Easel follows five connected workflows: **Discover** relevant trends and opportu
 - **Executable Skills:** image, card, voice-over, subtitle, editing, short-drama, and publishing Skills include runnable tools and save deliverables to `outputs/`.
 - **One source, many platforms:** adapt a single idea into Xiaohongshu cards, short video, a Zhihu article, or a short post while respecting platform conventions.
 - **Project-based outputs:** source material, intermediate files, metadata, and final deliverables stay together for revision, retrying, and publishing.
-- **A publishing and learning loop:** Easel supports login, adaptation, and publishing workflows for Xiaohongshu, Douyin, Kuaishou, Zhihu, Bilibili, WeChat Channels, and WeChat Official Accounts, with performance data feeding back into account profiles.
+- **A publishing and learning loop:** Easel supports login, adaptation, and publishing workflows for Xiaohongshu, Douyin, Kuaishou, Zhihu, Bilibili, WeChat Channels, WeChat Official Accounts, and Toutiao, with performance data feeding back into account profiles.
 
 ## 🧭 Five-Layer Content Workflow
 
@@ -94,6 +94,8 @@ Easel follows five connected workflows: **Discover** relevant trends and opportu
 5. **Attribute:** collect views, engagement, comments, and content performance, then preserve useful patterns in the account profile.
 
 ## 🧰 Implemented Capabilities
+
+The trend radar accepts user-defined Python collectors, HTTP services, and RSS/Atom feeds through a versioned data contract. Its existing six platforms use the same pipeline; adding your own source does not require changing the frontend.
 
 | Layer | Capabilities |
 |---|---|
@@ -180,7 +182,7 @@ For faster browsing, each cover opens a lightweight preview of up to one minute.
 
 ## 🚀 Quick Start
 
-Requirements: Linux, macOS, or Windows 10/11, Python 3.10+, and Git. The installer checks Node.js 24.16+ (24.x), 26.1+ (26.x), or 27+ (25.x and 26.0 are unsupported), plus FFmpeg and Playwright/Chromium. It provides a platform-specific guide when Node.js is missing.
+Requirements: Linux, macOS, or Windows 10/11, Python 3.10+, and Git. The installer checks Node.js 24.22.1+ (24.x), 26.12.1+ (26.x), or 27+ (25.x is unsupported), plus FFmpeg and Playwright/Chromium. It provides a platform-specific guide when Node.js is missing.
 
 ```bash
 git clone git@github.com:ZJU-REAL/Easel.git
@@ -272,6 +274,8 @@ when invoking the OpenClaw CLI rather than requesting an unsupported `medium` le
 
 Never commit `.env`, cookies, or platform login state. Real publishing can be affected by verification, permissions, platform risk controls, and UI changes; use previews and checks for the first attempt.
 
+The Publishing Center offers **Automatic publishing / Human-reviewed publishing**, retaining the existing automatic workflow by default. The manual path uses AI formatting, human review, copy/export, and personal submission on the official platform page. Editing the copy, tags, or media invalidates the previous review; copying, exporting, and scheduling never mark a post as published. WeChat Official Accounts support rich-text copy and an HTML preview. Switching paths does not change global publishing permissions; set `EASEL_PUBLISH_MODE=manual` to disable automatic Web submissions on the backend. See [the manual publishing guide](docs/manual-publishing.md) for configuration, browser login boundaries, and exports.
+
 ## 🧩 Using Easel
 
 | Command | Purpose |
@@ -316,11 +320,15 @@ Easel/
 
 Easel uses an isolated `easel` OpenClaw profile and does not overwrite an existing OpenClaw setup. The Web workspace defaults to port `7860`; the gateway port is chosen by OpenClaw (non-default profiles get a hashed port — `easel` → `37289`, not `18789`) and is resolved automatically by Easel.
 
+Hermes Agent is also available in **Settings → Agent runtime**, through its native ACP server and a separate `easel` profile. Credentials stay in Hermes; the default OpenClaw setup remains available. See [the Harness guide](docs/agent-harnesses.md).
+
 ## 📑 Documentation
 
+- [Trend collectors: Python scripts / HTTP services / RSS feeds (Chinese)](docs/trend-collectors.md)
 - [Capability map](docs/skill-function-mapping.md)
 - [SKILL interface specification](docs/SKILL-SPEC.md)
 - [Prompt and architecture layers](docs/prompt-stack.md)
+- [Context budget diagnostics](docs/context-budget-diagnostics.md)
 - [Known issues](docs/known-issues_EN.md)
 - [Full acknowledgments](docs/ACKNOWLEDGMENTS.md)
 
@@ -331,7 +339,7 @@ Ordered by priority — contributions welcome; feel free to claim or add items v
 - [ ] **1. Windows support** — Complete native Windows compatibility across installation, paths/encoding, and browser publishing.
 - [ ] **2. Simpler installation** — Lower the barrier to entry with fewer manual steps and a smoother one-click setup.
 - [ ] **3. Better in-app Agent UX** — Improve the Web workbench's chat interaction, loading logic, and streaming feedback.
-- [ ] **4. More Agent harnesses** — Support agent runtimes beyond OpenClaw, e.g. Claude Code, DeepSeek harness, Codex.
+- [ ] **4. More Agent harnesses** — Improve the existing Codex / OpenCode integrations and support additional runtimes such as Claude Code and DeepSeek harness. See [Agent harness integration](docs/agent-harnesses.md) for switching between existing engines.
 
 ## 🙏 Acknowledgments
 
@@ -352,6 +360,7 @@ Contributions and discussion are welcome. If you have ideas, questions, or impro
     <td align="center" width="84"><a href="https://github.com/qywMichelle"><img src="https://github.com/qywMichelle.png?size=96" width="72" height="72" alt="qywMichelle"><br><strong>qywMichelle</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/wulinjuan"><img src="https://github.com/wulinjuan.png?size=96" width="72" height="72" alt="wulinjuan"><br><strong>wulinjuan</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/arctanxarc"><img src="https://github.com/arctanxarc.png?size=96" width="72" height="72" alt="arctanxarc"><br><strong>arctanxarc</strong></a></td>
+    <td align="center" width="84"><a href="https://github.com/hongxingli319"><img src="https://github.com/hongxingli319.png?size=96" width="72" height="72" alt="hongxingli319"><br><strong>hongxingli319</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/mengyuyuan"><img src="https://github.com/mengyuyuan.png?size=96" width="72" height="72" alt="mengyuyuan"><br><strong>mengyuyuan</strong></a></td>
     <td align="center" width="84"><a href="https://github.com/Dear47"><img src="https://github.com/Dear47.png?size=96" width="72" height="72" alt="Dear47"><br><strong>Dear47</strong></a></td>
   </tr>

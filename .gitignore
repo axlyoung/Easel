@@ -12,6 +12,12 @@ build/
 .env
 .env.local
 .env.xhs
+# Local trend collector configuration can contain private endpoints/credentials.
+config/trend-sources.json
+config/trend-scripts.json
+config/trend-collectors/
+config/*.json.lock
+collectors/
 # setup.sh 默认把 Python 依赖装进项目内的 .venv（见 setup.sh 的虚拟环境分支）
 .venv/
 
@@ -72,6 +78,7 @@ profiles/*/
 
 # SKILL 自研原始版本（保留备查，含嵌套 git 仓库，不入库）
 skill-test/
+.playwright-cli/
 
 # 备份/临时文件
 *.bak
@@ -87,3 +94,6 @@ skills/builtin/video-production/vendor/**/node_modules/
 skills/builtin/video-production/vendor/**/.remotion/
 skills/builtin/video-production/vendor/**/models/
 skills/builtin/video-production/vendor/**/*large-v3*
+
+# 故障评估报告运行产物（issue #108，CI 与本地 pytest --junitxml 输出）
+reports/

@@ -1,3 +1,5 @@
+import { parsePersonas } from './personas';
+
 function getBasePath(): string {
   const path = window.location.pathname;
   const cleaned = path.replace(/\/index\.html$/, '').replace(/\/$/, '');
@@ -5,6 +7,16 @@ function getBasePath(): string {
 }
 
 const BASE = getBasePath();
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   // 全部是动态应用接口（登录态/数据等），禁止浏览器 HTTP 缓存——否则 /api/accounts 等可能被启发式
@@ -19,7 +31,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       /* 响应体不是 JSON，忽略 */
     }
-    throw new Error(detail || `请求失败（${res.status} ${res.statusText}）`);
+    throw new ApiError(detail || `请求失败（${res.status} ${res.statusText}）`, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -37,6 +49,7 @@ export interface HarnessSettingsResponse {
   models: Record<string, string>;
   sandbox: string;
   codex_auto_approve: boolean;
+  codex_effort?: string;
   locked: boolean;
   agents: { id: string; label: string; protocol: string; installed: boolean; install_hint: string }[];
 }
@@ -49,17 +62,70 @@ export interface HarnessModel {
   id: string;
   label: string;
   default: boolean;
+  efforts?: string[];
+  defaultEffort?: string;
+  inputModalities?: string[];
 }
 
 export function fetchHarnessModels(runtime: string): Promise<{ runtime: string; models: HarnessModel[] }> {
   return request(`/api/settings/harness/models/${encodeURIComponent(runtime)}`, { method: 'POST' });
 }
 
-export function saveHarnessSettings(runtime: string, model: string, sandbox: string, codexAutoApprove?: boolean): Promise<HarnessSettingsResponse> {
+export function saveHarnessSettings(runtime: string, model: string, sandbox: string, codexAutoApprove?: boolean, codexEffort?: string): Promise<HarnessSettingsResponse> {
   return request('/api/settings/harness', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ runtime, model, sandbox, codex_auto_approve: codexAutoApprove }),
+    body: JSON.stringify({ runtime, model, sandbox, codex_auto_approve: codexAutoApprove, codex_effort: codexEffort }),
+  });
+}
+
+export interface CodexStatus {
+  state: 'authenticated' | 'unauthenticated' | 'external' | 'unknown';
+  authType?: string;
+  windows: { window: string; usedPercent: number; windowDurationMins?: number; resetsAt?: number }[];
+  quotaNote?: string;
+  error?: { code: string; message: string };
+}
+
+export function fetchCodexStatus(): Promise<CodexStatus> {
+  return request('/api/settings/harness/codex/status');
+}
+
+export interface CodexLoginState {
+  id?: string;
+  state: 'idle' | 'starting' | 'pending' | 'success' | 'failed' | 'expired' | 'cancelled' | 'logging_out' | 'logged_out' | 'unknown';
+  method?: 'browser' | 'device';
+  authUrl?: string;
+  userCode?: string;
+  message?: string;
+}
+
+export function fetchCodexLogin(): Promise<CodexLoginState> {
+  return request('/api/settings/harness/codex/login');
+}
+
+export function startCodexLogin(method: 'browser' | 'device'): Promise<CodexLoginState> {
+  return request('/api/settings/harness/codex/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method }),
+  });
+}
+
+export function cancelCodexLogin(id: string): Promise<CodexLoginState> {
+  return request('/api/settings/harness/codex/login/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+  });
+}
+
+export function logoutCodex(): Promise<CodexLoginState> {
+  return request('/api/settings/harness/codex/logout', { method: 'POST' });
+}
+
+export function probeCodex(model: string, effort: string): Promise<{
+  ok: boolean; model?: string; elapsedMs?: number; error?: { code: string; message: string };
+}> {
+  return request('/api/settings/harness/codex/probe', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, effort }),
   });
 }
 
@@ -173,7 +239,7 @@ export function fetchStatus(): Promise<StatusResponse> {
 }
 
 export function fetchPersonas(): Promise<PersonaItem[]> {
-  return request<PersonaItem[]>('/api/personas');
+  return request<unknown>('/api/personas').then(parsePersonas);
 }
 
 export function fetchPersonaDetail(name: string): Promise<PersonaDetail> {
@@ -202,10 +268,82 @@ export function deletePersona(name: string): Promise<{ ok: boolean; deleted: str
 }
 
 // ---- 热点雷达 ----
-export interface TrendItem { title: string; hot: string; url: string; }
-export interface TrendGroup { platform: string; label: string; items: TrendItem[]; ok?: boolean; }
-export function fetchTrends(platforms: string, limit = 12): Promise<{ trends: TrendGroup[]; updated: number }> {
-  return request(`/api/trends?platforms=${encodeURIComponent(platforms)}&limit=${limit}`);
+import { parseTrends, parseTrendSources, parseTrendManagement } from './trendValidation';
+
+async function trendRequest(url: string, options: RequestInit = {}, timeout = 10000): Promise<unknown> {
+  try {
+    const response = await fetch(`${BASE}${url}`, { cache: 'no-store', ...options, signal: AbortSignal.timeout(timeout) });
+    if (!response.body) throw new Error('热点接口未返回数据。');
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 4 * 1024 * 1024) { await reader.cancel(); throw new Error('热点接口响应过大，已停止加载。'); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    let data: unknown;
+    try {
+      const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      let depth = 0, quoted = false, escaped = false;
+      for (const char of raw) {
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') quoted = false;
+        } else if (char === '"') quoted = true;
+        else if (char === '{' || char === '[') { if (++depth > 24) throw new Error(); }
+        else if (char === '}' || char === ']') depth--;
+      }
+      data = JSON.parse(raw);
+    } catch { throw new Error('热点接口响应格式异常，请稍后重试。'); }
+    if (!response.ok) {
+      const detail = data && typeof data === 'object' && 'detail' in data ? data.detail : null;
+      throw new Error(typeof detail === 'string' ? detail.slice(0, 240) : `热点请求失败（${response.status}）`);
+    }
+    return data;
+  } catch (error: unknown) {
+    if (error instanceof DOMException && ['TimeoutError', 'AbortError'].includes(error.name)) throw new Error('热点请求超时，请稍后重试。');
+    throw error instanceof Error ? error : new Error('热点请求失败，请稍后重试。');
+  }
+}
+export interface TrendItem {
+  id: string; title: string; hot: string; url: string; published_at: string | null;
+  heat: { value: number | null; text: string; unit: string };
+}
+export interface TrendGroup {
+  platform: string; label: string; items: TrendItem[]; ok: boolean;
+  status: 'fresh' | 'stale' | 'error'; stale: boolean; fetched_at: string | null;
+  last_attempt_at: number; error: { code: string; message: string } | null;
+}
+export interface TrendSource {
+  id: string; label: string; type: 'python' | 'http' | 'rss'; default: boolean; refresh_seconds: number;
+}
+export function fetchTrendSources() {
+  return trendRequest('/api/trends/sources').then(parseTrendSources);
+}
+export function fetchTrends(platforms?: string, limit = 12) {
+  return trendRequest(`/api/trends?limit=${limit}${platforms === undefined ? '' : `&platforms=${encodeURIComponent(platforms)}`}`, {}, 130000).then(parseTrends);
+}
+export interface TrendManagedSource {
+  id: string; label: string; type: TrendSource['type'] | 'unknown'; enabled: boolean; default: boolean; builtin: boolean;
+}
+export function fetchTrendManagement() {
+  return trendRequest('/api/trends/manage').then(parseTrendManagement);
+}
+export async function updateTrendSource(value: Record<string, unknown>): Promise<{ id: string }> {
+  const result = await trendRequest('/api/trends/manage', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+  }, 15000);
+  if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true || !('id' in result) || typeof result.id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(result.id)) throw new Error('保存结果异常，请刷新数据源列表确认。');
+  return { id: result.id };
 }
 
 // ---- 内容排期 ----
@@ -347,16 +485,18 @@ export interface ChatQuestion {
   id: string;              // gateway question record id (ask_...)
   questions: ChatQuestionItem[];
   expiresAtMs?: number;
+  status?: string;
 }
+export interface ChatQuestionClosed { id: string; status: string; }
 export async function answerQuestion(
   payload: { questionId: string; answers: Record<string, string[]>; resolvedBy?: string },
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; status?: string; expired?: boolean }> {
   const res = await fetch(`${BASE}/api/chat/question/answer`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string };
-  return { ok: data.ok === true, error: data.error };
+  const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; status?: string; expired?: boolean };
+  return { ok: data.ok === true, error: data.error, status: data.status, expired: data.expired };
 }
 
 /** 批量查 question 状态：过滤重放中已解决/已过期的旧题。 */
@@ -491,11 +631,30 @@ export interface PublishResult {
   pending?: boolean;
 }
 
+export interface PublishingPolicy {
+  mode: 'manual' | 'automated';
+  automaticSubmission: boolean;
+}
+
+export function fetchPublishingPolicy(): Promise<PublishingPolicy> {
+  return request('/api/publishing-policy');
+}
+
+/** Create a local export only; no social platform is contacted. */
+export function exportManualPackage(platform: string, payload: {
+  title: string; body: string; tags: string; media: string[]; reviewed: boolean;
+}): Promise<{ path: string; filename: string; published: false }> {
+  return request(`/api/manual-publish/${encodeURIComponent(platform)}/export`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
 /** 一键发布到某平台（真发布，--exec）。media 为 outputs 相对路径数组。
- * 抖音返回 {async:true}，需轮询 publishStatus；其他平台同步返回结果。 */
+ * 抖音返回 {async:true}，需轮询 publishStatus；其他平台同步返回结果。
+ * draft=true 表示存草稿（仅今日头条支持，落后台草稿箱不公开发布）。 */
 export function publishNow(
   platform: string,
-  payload: { title: string; body: string; media: string[]; tags?: string },
+  payload: { title: string; body: string; media: string[]; tags?: string; draft?: boolean; persona?: string },
 ): Promise<PublishResult> {
   return request<PublishResult>(`/api/publish/${encodeURIComponent(platform)}`, {
     method: 'POST',
@@ -602,6 +761,7 @@ export function streamChat(
   attachments: UploadedFile[] = [],
   onQuestion?: (q: ChatQuestion) => void,
   onHeartbeat?: (note: string) => void,
+  onQuestionClosed?: (q: ChatQuestionClosed) => void,
 ): AbortController {
   const controller = new AbortController();
   let lastEventId = 0;
@@ -644,6 +804,11 @@ export function streamChat(
             const q = JSON.parse(data) as ChatQuestion;
             if (q && typeof q === 'object' && Array.isArray(q.questions)) onQuestion(q);
           } catch { /* 解析失败忽略 */ }
+        } else if (currentEvent === 'question_closed' && onQuestionClosed) {
+          try {
+            const closed = JSON.parse(data) as ChatQuestionClosed;
+            if (closed && typeof closed.id === 'string' && typeof closed.status === 'string') onQuestionClosed(closed);
+          } catch {}
         } else if (currentEvent === 'heartbeat') {
           // 防呆心跳：独立于 activity/thinking，仅作「未卡住」提示，不覆盖真实状态。
           if (onHeartbeat) { try { onHeartbeat(JSON.parse(data) as string); } catch { onHeartbeat(data); } }
@@ -701,8 +866,12 @@ export function streamChat(
           : await fetch(`${BASE}/api/chat/jobs/${encodeURIComponent(turnId || '')}/stream?after=${lastEventId}`, {
               signal: controller.signal,
             });
-        if (!first && res.status === 404 && onRecoveryUnavailable) {
-          onRecoveryUnavailable();
+        // jobs 流 404 = 任务记录不存在（后端重启丢日志 / 首发请求 5xx 没起 supervisor）。
+        // 必须终结：旧逻辑依赖 onRecoveryUnavailable（新发送不传），不传时静默落进
+        // 无限重试（1s 一次 ×130 分钟），onError 永不触发，会话卡死在「自动续接」。
+        if (!first && res.status === 404) {
+          if (onRecoveryUnavailable) onRecoveryUnavailable();
+          else onError(new Error('任务记录不存在或已失效，无法续接；请重新发送'));
           return;
         }
         if (await consume(res)) return;
@@ -727,6 +896,27 @@ export function streamChat(
   })();
 
   return controller;
+}
+
+/** Persisted state is historical evidence, not a worker liveness check. */
+export interface ChatRun {
+  turn_id: string;
+  tracking: 'persisted' | 'legacy';
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'unknown';
+  backend?: string;
+  version?: number;
+  can_resume: false;
+}
+
+export function fetchChatRun(turnId: string, signal?: AbortSignal): Promise<ChatRun> {
+  return request(`/api/chat/jobs/${encodeURIComponent(turnId)}`, { signal });
+}
+
+export function updateChatRun(turnId: string, action: 'reconcile' | 'cancel-queued', version: number): Promise<ChatRun> {
+  return request(`/api/chat/jobs/${encodeURIComponent(turnId)}/${action}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_version: version }),
+  });
 }
 
 /** 取某会话最近一轮的完整结果（SSE 断线后据此取回）。 */
@@ -869,6 +1059,24 @@ export function saveChatTransport(transport: 'api' | 'openclaw'): Promise<ModelC
   });
 }
 
+// ── 网络代理设置（EASEL_PROXY；更多设置页） ─────────────────────────
+
+export interface ProxySettings {
+  proxy: string;                       // 生效中的代理地址，空串=未配置
+  source: 'env' | 'envfile' | 'none';  // env=启动环境固定（只读）；envfile=.env 持久化
+}
+
+export function fetchProxySettings(): Promise<ProxySettings> {
+  return request('/api/settings/proxy');
+}
+
+export function saveProxySettings(proxy: string): Promise<{ ok: boolean; proxy: string; source: string }> {
+  return request('/api/settings/proxy', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proxy }),
+  });
+}
+
 // （保存接口见上方 saveModelConfig）
 
 export interface SelftestResult { baseUrl: string; ok: boolean; ms: number; detail?: string }
@@ -896,6 +1104,8 @@ export interface LocalAgentInfo {
   openclawProvider: string | null;
   configProvider?: string | null;
   supported: boolean;
+  /** Independent execution engine; supported/configured still refer to OpenClaw providers. */
+  nativeRuntime?: string | null;
   configured: boolean;
   usableWithoutKey: boolean;
   loginHint: string;

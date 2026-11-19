@@ -15,13 +15,17 @@ from .workspace import harness_instructions
 _POOLS: dict[asyncio.AbstractEventLoop, dict[tuple, dict]] = {}
 IDLE_SECONDS = 300
 MAX_IDLE_PROCESSES = 8
+# Bound outstanding reverse RPCs (permissions/questions), not tool executions.
+MAX_CLIENT_REQUESTS = 64
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 
-async def close_sessions(session_key: str | None = None):
+async def close_sessions(session_key: str | None = None, *, runtime: str | None = None):
     loop = asyncio.get_running_loop()
     pool = _POOLS.get(loop, {})
     selected = [(key, entry) for key, entry in list(pool.items())
-                if session_key is None or key[1] == session_key]
+                if (session_key is None or key[1] == session_key)
+                and (runtime is None or entry["rpc"].request.env.get("EASEL_AGENT_RUNTIME") == runtime)]
     for key, entry in selected:
         pool.pop(key, None)
         if entry["timer"]:
@@ -43,8 +47,8 @@ async def connection(request: RunRequest, command: list[str], notify, respond, *
     key = (acp, request.session_key)
     signature = hashlib.sha256(json.dumps([
         str(request.cwd.resolve()), sorted(request.env.items()), command,
-        request.model, request.sandbox, harness_instructions(request),
-    ], ensure_ascii=False).encode("utf-8")).hexdigest()
+        request.model, request.sandbox, request.codex_effort, harness_instructions(request),
+    ], ensure_ascii=True).encode("utf-8")).hexdigest()
     entry = pool.get(key)
     previous = None
     if entry and entry["busy"]:
@@ -125,8 +129,10 @@ class RPC:
         self.stderr = None
         self.write_lock = asyncio.Lock()
         self.client_error = None
+        self.reader_error = None
         self.initialized = None
         self.native_id = ""
+        self.stderr_hint = ""
 
     async def __aenter__(self):
         env = {**self.request.env, "EASEL_ROOT": str(self.request.cwd.resolve()),
@@ -135,7 +141,7 @@ class RPC:
             self.process = await asyncio.create_subprocess_exec(
                 *self.command, cwd=str(self.request.cwd), env=env,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, limit=4 * 1024 * 1024,
+                stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt")
         except OSError as error:
             raise HarnessError("无法启动 Agent CLI，请检查安装与 PATH") from error
@@ -186,7 +192,15 @@ class RPC:
     async def _read(self):
         failure = HarnessError("Agent 协议连接已断开，请检查 CLI 登录、模型与版本")
         try:
-            while line := await self.process.stdout.readline():
+            while True:
+                try:
+                    line = await self.process.stdout.readline()
+                except ValueError:
+                    raise HarnessError(
+                        f"Agent 协议单行消息超过 {MAX_MESSAGE_BYTES} 字节上限，"
+                        "请升级 Agent 以分块输出或回放历史") from None
+                if not line:
+                    break
                 try:
                     message = json.loads(line)
                     if not isinstance(message, dict):
@@ -195,6 +209,9 @@ class RPC:
                     raise HarnessError("Agent 返回了无效 JSON-RPC 数据") from None
                 if "method" in message:
                     if "id" in message:
+                        self.tasks.difference_update([task for task in self.tasks if task.done()])
+                        if len(self.tasks) >= MAX_CLIENT_REQUESTS:
+                            raise HarnessError("Agent 客户端请求并发超过上限，本轮已终止")
                         task = asyncio.create_task(self._serve(message))
                         self.tasks.add(task)
                         task.add_done_callback(self.tasks.discard)
@@ -205,26 +222,40 @@ class RPC:
                     if future is not None and not future.done():
                         if "error" in message:
                             error = message["error"]
-                            detail = str(error.get("message", "请求失败"))[:1000]
-                            for key, value in self.request.env.items():
-                                if any(marker in key.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD")):
-                                    if len(value) >= 4:
-                                        detail = detail.replace(value, "***")
+                            if error.get("code") in (-32700, -32600, -32602, "INVALID_REQUEST"):
+                                detail = "请求格式或参数无效，请检查 Agent CLI 协议版本"
+                            else:
+                                detail = str(error.get("message", "请求失败"))[:1000]
+                                for key, value in self.request.env.items():
+                                    if any(marker in key.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD")):
+                                        if len(value) >= 4:
+                                            detail = detail.replace(value, "***")
                             future.set_exception(HarnessError(f"Agent 协议错误：{detail}"))
                         else:
-                            future.set_result(message.get("result") or {})
+                            future.set_result(message.get("result"))
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            failure = error if isinstance(error, HarnessError) else HarnessError("Agent 协议读取失败")
+            failure = error if isinstance(error, HarnessError) else HarnessError(
+                f"Agent 协议读取失败（{type(error).__name__}）")
         finally:
+            if self.stderr_hint and str(failure).startswith("Agent 协议连接已断开"):
+                failure = HarnessError(self.stderr_hint)
+            self.reader_error = failure
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(failure)
 
     async def _drain_stderr(self):
-        while await self.process.stderr.read(8192):
-            pass
+        tail = ""
+        while chunk := await self.process.stderr.read(8192):
+            if self.request.env.get("EASEL_AGENT_RUNTIME") == "codex":
+                from .codex_diagnostics import failure
+                tail = (tail + chunk.decode("utf-8", errors="replace"))[-16384:]
+                detail = failure(tail)
+                if detail["code"] != "unknown":
+                    # Keep only an allowlisted hint. Never log or return raw stderr.
+                    self.stderr_hint = detail["message"]
 
     async def wait_notification(self, future: asyncio.Future):
         finished, _ = await asyncio.wait((future, self.reader), return_when=asyncio.FIRST_COMPLETED)
@@ -233,7 +264,7 @@ class RPC:
             if self.client_error:
                 raise self.client_error
             return result
-        raise HarnessError("Agent 在本轮完成前退出，请检查 CLI 登录与模型配置")
+        raise self.reader_error or HarnessError("Agent 在本轮完成前退出，请检查 CLI 登录与模型配置")
 
     async def __aexit__(self, *arguments):
         for task in self.tasks:
@@ -254,7 +285,7 @@ class RPC:
             else:
                 try:
                     os.killpg(self.process.pid, signal.SIGTERM)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
             try:
                 await asyncio.wait_for(self.process.wait(), 3)
@@ -264,13 +295,13 @@ class RPC:
                 else:
                     try:
                         os.killpg(self.process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
+                    except (ProcessLookupError, PermissionError):
                         pass
                 await self.process.wait()
             if os.name != "nt":
                 try:
                     os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
         for task in (self.reader, self.stderr):
             if task is not None:
